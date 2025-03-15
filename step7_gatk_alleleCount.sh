@@ -347,22 +347,16 @@ if [ $sc_counts = "true" ]; then
 
   # make list of all unique barcodes in wasp bam
   echo "Retrieving unique barcodes from $(echo $(basename $bamsites))"
-  barcodes=($(samtools view $bamsites | pv | cut -f 12- | tr "\t" "\n"  | grep  "^CB:Z:"  | cut -d ':' -f3 | sort | uniq ))
+  samtools view $bamsites | pv | cut -f 12- | tr "\t" "\n"  | grep  "^CB:Z:"  | cut -d ':' -f3 | sort | uniq > $scbamdir/barcodes.txt
+  barcodes=($(cat $scbamdir/barcodes.txt))
   num_barcodes=${#barcodes[@]}
 
   # split wasp bam file into cell-specific bams in parallel loop using subset-bam
   echo "Splitting $(echo $(basename $bamsites)) into single cell bam files"
   export TMPDIR=$workdir/TMPDIR
   rm -rf $TMPDIR; mkdir -p $TMPDIR 2> /dev/null
-  for barcode in ${barcodes[*]}; do \
-    echo $barcode > $TMPDIR/barcode.txt
-    subset-bam \
-      --bam $bamsites \
-      --cell-barcodes $TMPDIR/barcode.txt \
-      --out-bam $scbamdir/bam/$barcode.bam \
-      --cores $threads
-    echo $barcode
-  done | pv -l -s $num_barcodes > /dev/null
+  # https://github.com/aertslab/single_cell_toolkit/blob/master/subset_bam_per_cb.sh
+  subset_bam_per_cb.sh $bamsites $scbamdir/barcodes.txt $scbamdir/bam/ 1000
 
   # allele specific counts of celltype sam files with gatk in parallel loop
   # output as [barcode].counts in counts dir
