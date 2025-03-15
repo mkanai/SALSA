@@ -22,14 +22,14 @@ function usage {
 cat << "EOF"
 
 
-        /|      (                (      (              
-     .-((--.     )\ )     (       )\ )   )\ )     (    
-    ( '`^'; )   (()/(     )\     (()/(  (()/(     )\   
-    `;#    |     /(_)) ((((_)(    /(_))  /(_)) ((((_)( 
-     \#    |    (_))    )\ _ )\  (_))   (_))    )\ _ )\ 
-      \#   \    / __|   (_)_\(_) | |    / __|   (_)_\(_) 
-       '-.  )   \__ \    / _ \   | |__  \__ \    / _ \   
-          \(    |___/   /_/ \_\  |____| |___/   /_/ \_\ 
+        /|      (                (      (
+     .-((--.     )\ )     (       )\ )   )\ )     (
+    ( '`^'; )   (()/(     )\     (()/(  (()/(     )\
+    `;#    |     /(_)) ((((_)(    /(_))  /(_)) ((((_)(
+     \#    |    (_))    )\ _ )\  (_))   (_))    )\ _ )\
+      \#   \    / __|   (_)_\(_) | |    / __|   (_)_\(_)
+       '-.  )   \__ \    / _ \   | |__  \__ \    / _ \
+          \(    |___/   /_/ \_\  |____| |___/   /_/ \_\
            `
 
 Single Cell Allele Specific Analysis
@@ -48,7 +48,7 @@ Usage: step7_gatk_alleleCount.sh [-viognmrlCcspVt]
   -l  | --interval           STR   optional: count a specified chromosome eg. [chr22]
   -C  | --pseudobulk_counts        allele-specific counts with all cells grouped together
   -c  | --celltype_counts          allele-specific counts after grouping cells by barcode celltype annotation
-  -s  | --single_cell_counts       single cell allele-specific counts for provided barcodes     
+  -s  | --single_cell_counts       single cell allele-specific counts for provided barcodes
   -p  | --isphased                 optional: input vcf is phased. Default=[false]
   -V  | --verbose                  optional: stream GATK output to terminal. Default=[false]
   -t  | --threads            INT   number of threads. Default=[1]
@@ -122,8 +122,16 @@ if [ ! -f $barcodes ]; then { echo "Barcodes file not found"; exit 1; }; fi
 # ensure gatk and miniconda are in path when working in LSF environment
 export PATH=/gatk:/opt/miniconda/envs/gatk/bin:/opt/miniconda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
+if [ -z "${TMPDIR}" ]
+then
+  export TMPDIR="/tmp"
+  echo "TMPDIR was undefined, set to $TMPDIR"
+else
+  echo "TMPDIR is already set to $TMPDIR"
+fi
+
 # set exit status temporary file for monitoring return values in parallel processes
-echo $exit_status > /tmp/exit_status.txt
+echo $exit_status > $TMPDIR/exit_status.txt
 
 # activate gatk conda environ
 source activate gatk
@@ -146,7 +154,7 @@ fi
 echo "Adding heterozygosity filter to input VCF"
 gatk VariantFiltration \
   -V $inputvcf \
-  -O /tmp/isHet.$(basename $inputvcf) \
+  -O $TMPDIR/isHet.$(basename $inputvcf) \
   --genotype-filter-expression "isHet == 1" \
   --genotype-filter-name "isHetFilter" >> ${outputlog} 2>&1 \
   || { echo "VariantFiltration failed. Check $outputlog for additional info"; exit 1; }
@@ -154,16 +162,16 @@ gatk VariantFiltration \
 
 echo "Filtering multiallelic and non-heterozygous variants from $inputvcf and retaining biallelic SNV"
 # collapse variants with the same context and remove multiallelic variants
-bcftools norm /tmp/isHet.$(basename $inputvcf) -m +snps |bcftools view -Oz -m2 -M2 -v snps > /tmp/single_context.vcf.gz
+bcftools norm $TMPDIR/isHet.$(basename $inputvcf) -m +snps |bcftools view -Oz -m2 -M2 -v snps > $TMPDIR/single_context.vcf.gz
 
 # remove variants that are not heterozygous
-(bcftools view -h /tmp/single_context.vcf.gz; bcftools view -H /tmp/single_context.vcf.gz|grep 'isHetFilter')|\
-  bcftools view -Oz - > /tmp/filter.$(basename $inputvcf)
-gatk IndexFeatureFile -I /tmp/filter.$(basename $inputvcf) >> ${outputlog} 2>&1 \
+(bcftools view -h $TMPDIR/single_context.vcf.gz; bcftools view -H $TMPDIR/single_context.vcf.gz|grep 'isHetFilter')|\
+  bcftools view -Oz - > $TMPDIR/filter.$(basename $inputvcf)
+gatk IndexFeatureFile -I $TMPDIR/filter.$(basename $inputvcf) >> ${outputlog} 2>&1 \
   || { echo "IndexFeatureFile failed. Check $outputlog for additional info"; exit 1; }
 
 # limit to specified interval if -L flag selected
-rm -rf /tmp/interval_files_folder 2> /dev/null
+rm -rf $TMPDIR/interval_files_folder 2> /dev/null
 if [ $interval ]; then
   echo "Selected interval is $interval"
   workdir=$SCRATCH1/wasp_${modality}/$genotype/$library_id/$interval
@@ -178,7 +186,7 @@ if [ $interval ]; then
   # create scatter gather intervals across selected interval and no. threads
   gatk SplitIntervals \
     -R $reference/fasta/genome.fa \
-    -O /tmp/interval_files_folder \
+    -O $TMPDIR/interval_files_folder \
     --scatter-count $threads \
     -L $interval \
     --interval-set-rule INTERSECTION >> ${outputlog} 2>&1 \
@@ -187,19 +195,19 @@ else
   # create scatter gather intervals across no. threads
   gatk SplitIntervals \
     -R $reference/fasta/genome.fa \
-    -O /tmp/interval_files_folder \
+    -O $TMPDIR/interval_files_folder \
     --scatter-count $threads >> ${outputlog} 2>&1 \
     || { echo "SplitIntervals failed. Check $outputlog for additional info"; exit 1; }
 fi
 # create array of scatter gather intervals
-scatter_intervals=$(ls /tmp/interval_files_folder)
+scatter_intervals=$(ls $TMPDIR/interval_files_folder)
 
 #########################################################
 ##################PSEUDOBULK COUNTS######################
 # ase counting for all cell types grouped together
 if [ $pseudobulk_counts = "true" ]; then
   # create a new directory for split tables
-  rm -rf /tmp/gather_tables; mkdir /tmp/gather_tables > /dev/null
+  rm -rf $TMPDIR/gather_tables; mkdir $TMPDIR/gather_tables > /dev/null
 
   # do allele counting across intervals
   for scatter_interval in ${scatter_intervals[@]}; do
@@ -208,41 +216,41 @@ if [ $pseudobulk_counts = "true" ]; then
     gatk ASEReadCounter \
       -R $reference/fasta/genome.fa \
       -I $waspbam \
-      -V /tmp/filter.$(basename $inputvcf) \
-      -L /tmp/interval_files_folder/$scatter_interval \
-      -O /tmp/gather_tables/$scatter_interval >> ${outputlog} 2>&1 \
-      || { echo "ASEReadCounter failed on $scatter_interval. Check $outputlog for additional info"; echo 1 > /tmp/exit_status.txt; exit 1; } &
+      -V $TMPDIR/filter.$(basename $inputvcf) \
+      -L $TMPDIR/interval_files_folder/$scatter_interval \
+      -O $TMPDIR/gather_tables/$scatter_interval >> ${outputlog} 2>&1 \
+      || { echo "ASEReadCounter failed on $scatter_interval. Check $outputlog for additional info"; echo 1 > $TMPDIR/exit_status.txt; exit 1; } &
   done
   # exit with 1 if interval failed
   wait
-  exit_status=$(head -n1 /tmp/exit_status.txt)
+  exit_status=$(head -n1 $TMPDIR/exit_status.txt)
   if [ $exit_status -eq 1 ]; then exit 1; fi
 
   echo "Gathering $celltype scattered interval count tables"
   # gather all the count tables into a single table
-  tables=($(ls /tmp/gather_tables))
-  (head -n1 /tmp/gather_tables/$tables; tail -q -n+2 /tmp/gather_tables/*) > $outputdir/$library_id.${interval}counts.pseudobulk.table
+  tables=($(ls $TMPDIR/gather_tables))
+  (head -n1 $TMPDIR/gather_tables/$tables; tail -q -n+2 $TMPDIR/gather_tables/*) > $outputdir/$library_id.${interval}counts.pseudobulk.table
 
 # add phased genotypes to counts table if input vcf is phased
   if [ $isphased = "true" ]; then
     # create a genotype table with unique variant ids and their corresponding genotypes using the filtered input vcf
-    bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' /tmp/filter.$(basename $inputvcf) |\
-    awk 'BEGIN{FS=OFS="\t"} {print $1"_"$2"_"$3"_"$4, $5}' > /tmp/genotype_table.tsv
+    bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' $TMPDIR/filter.$(basename $inputvcf) |\
+    awk 'BEGIN{FS=OFS="\t"} {print $1"_"$2"_"$3"_"$4, $5}' > $TMPDIR/genotype_table.tsv
 
     # create a unique identifier for each variant in the count table and put it in the first column
     count_table=$outputdir/$library_id.${interval}counts.pseudobulk.table
-    awk 'BEGIN{FS=OFS="\t"} {print (NR>1?$1"_"$2"_"$4"_"$5:"variant_id"), $0}' $count_table > /tmp/variantid_count_table.tsv
+    awk 'BEGIN{FS=OFS="\t"} {print (NR>1?$1"_"$2"_"$4"_"$5:"variant_id"), $0}' $count_table > $TMPDIR/variantid_count_table.tsv
 
     # join the count table and genotype table by unique variant_id in the first column
-    join  -j 1 -t $'\t' <(sort /tmp/genotype_table.tsv) <(sort /tmp/variantid_count_table.tsv) > /tmp/phased_count.table
+    join  -j 1 -t $'\t' <(sort $TMPDIR/genotype_table.tsv) <(sort $TMPDIR/variantid_count_table.tsv) > $TMPDIR/phased_count.table
 
     # reheader the merged table
-    (echo -e "variant_id\tGT\t$(head -n1 $count_table)"; cat /tmp/phased_count.table) > $outputdir/$library_id.${interval}counts.pseudobulk.phased.table
+    (echo -e "variant_id\tGT\t$(head -n1 $count_table)"; cat $TMPDIR/phased_count.table) > $outputdir/$library_id.${interval}counts.pseudobulk.phased.table
   fi
 
   # TODO: annotate count table with gnomad AF and gene names etc from FUNCOTATION
 
-fi 
+fi
 ##################################################################
 ##################CELLTYPE PSEUDOBULK COUNTS######################
 # ase counting for individual celltypes (ie group all cells of the same type and count together)
@@ -252,21 +260,21 @@ if [ $celltype_pseudobulk_counts = "true" ]; then
   echo "Performing cell type pseudobulk counts"
   # first format the barcode file by printing out barcode,orig.ident,lowres.celltype columns and then filter by sample name
   awk -F ',' 'NR==1 {for (i=1; i<=NF; i++) {f[$i] = i}}{ print $(f["barcode"]),$(f["orig.ident"]),$(f["celltype"]) }' $barcodes |\
-  awk -v a="${library_id}" '{if($2 == a) {print "CB:Z:"$1"-1",$2,$3}}' > /tmp/${modality}_barcodes.$library_id   
+  awk -v a="${library_id}" '{if($2 == a) {print "CB:Z:"$1"-1",$2,$3}}' > $TMPDIR/${modality}_barcodes.$library_id
 
-  celltype_groups=$(tail -n+2 /tmp/${modality}_barcodes.$library_id|awk '{print $3}'|sort|uniq)
+  celltype_groups=$(tail -n+2 $TMPDIR/${modality}_barcodes.$library_id|awk '{print $3}'|sort|uniq)
   for celltype in $celltype_groups; do
     # filter barcodes for selected celltype barcodes
     echo $celltype
-    awk -v a="${celltype}" '$3 == a' /tmp/${modality}_barcodes.$library_id | \
-    awk '{print $1}' | cut -d ':' -f3 > /tmp/${modality}_barcodes.$library_id.$celltype.txt 
+    awk -v a="${celltype}" '$3 == a' $TMPDIR/${modality}_barcodes.$library_id | \
+    awk '{print $1}' | cut -d ':' -f3 > $TMPDIR/${modality}_barcodes.$library_id.$celltype.txt
 
     rm $workdir/$library_id.$celltype.${interval}wasp.bam 2> /dev/null
-    export TMPDIR=$workdir/TMPDIR  
+    export TMPDIR=$workdir/TMPDIR
     rm -rf $TMPDIR; mkdir -p $TMPDIR 2> /dev/null
     subset-bam \
       --bam $waspbam \
-      --cell-barcodes /tmp/${modality}_barcodes.$library_id.$celltype.txt  \
+      --cell-barcodes $TMPDIR/${modality}_barcodes.$library_id.$celltype.txt  \
       --out-bam $workdir/$library_id.$celltype.${interval}wasp.bam \
       --cores $threads
 
@@ -274,7 +282,7 @@ if [ $celltype_pseudobulk_counts = "true" ]; then
     samtools index -@ $threads $workdir/$library_id.$celltype.${interval}wasp.bam
 
     # create a new directory for split tables
-    rm -rf /tmp/gather_tables; mkdir /tmp/gather_tables > /dev/null
+    rm -rf $TMPDIR/gather_tables; mkdir $TMPDIR/gather_tables > /dev/null
 
     # do allele counting across intervals
     for scatter_interval in ${scatter_intervals[@]}; do
@@ -283,36 +291,36 @@ if [ $celltype_pseudobulk_counts = "true" ]; then
       gatk ASEReadCounter \
         -R $reference/fasta/genome.fa \
         -I $workdir/$library_id.$celltype.${interval}wasp.bam \
-        -V /tmp/filter.$(basename $inputvcf) \
-        -L /tmp/interval_files_folder/$scatter_interval \
-        -O /tmp/gather_tables/$scatter_interval >> ${outputlog} 2>&1 \
-        || { echo "ASEReadCounter failed on $scatter_interval. Check $outputlog for additional info"; echo 1 > /tmp/exit_status.txt; exit 1; } &
+        -V $TMPDIR/filter.$(basename $inputvcf) \
+        -L $TMPDIR/interval_files_folder/$scatter_interval \
+        -O $TMPDIR/gather_tables/$scatter_interval >> ${outputlog} 2>&1 \
+        || { echo "ASEReadCounter failed on $scatter_interval. Check $outputlog for additional info"; echo 1 > $TMPDIR/exit_status.txt; exit 1; } &
     done
     # exit with 1 if interval failed
     wait
-    exit_status=$(head -n1 /tmp/exit_status.txt)
+    exit_status=$(head -n1 $TMPDIR/exit_status.txt)
     if [ $exit_status -eq 1 ]; then exit 1; fi
 
     echo "Gathering celltype pseudobulk count tables"
     # gather all the count tables into a single table
-    tables=($(ls /tmp/gather_tables))
-    (head -n1 /tmp/gather_tables/$tables; tail -q -n+2 /tmp/gather_tables/*) > $outputdir/$library_id.${interval}counts.$celltype.table
+    tables=($(ls $TMPDIR/gather_tables))
+    (head -n1 $TMPDIR/gather_tables/$tables; tail -q -n+2 $TMPDIR/gather_tables/*) > $outputdir/$library_id.${interval}counts.$celltype.table
 
     # add phased genotypes to counts table if input vcf is phased
     if [ $isphased = "true" ]; then
       # create a genotype table with unique variant ids and their corresponding genotypes using the filtered input vcf
-      bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' /tmp/filter.$(basename $inputvcf) |\
-      awk 'BEGIN{FS=OFS="\t"} {print $1"_"$2"_"$3"_"$4, $5}' > /tmp/genotype_table.tsv
+      bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' $TMPDIR/filter.$(basename $inputvcf) |\
+      awk 'BEGIN{FS=OFS="\t"} {print $1"_"$2"_"$3"_"$4, $5}' > $TMPDIR/genotype_table.tsv
 
       # create a unique identifier for each variant in the count table and put it in the first column
       count_table=$outputdir/$library_id.${interval}counts.$celltype.table
-      awk 'BEGIN{FS=OFS="\t"} {print (NR>1?$1"_"$2"_"$4"_"$5:"variant_id"), $0}' $count_table > /tmp/variantid_count_table.tsv
+      awk 'BEGIN{FS=OFS="\t"} {print (NR>1?$1"_"$2"_"$4"_"$5:"variant_id"), $0}' $count_table > $TMPDIR/variantid_count_table.tsv
 
       # join the count table and genotype table by unique variant_id in the first column
-      join  -j 1 -t $'\t' <(sort /tmp/genotype_table.tsv) <(sort /tmp/variantid_count_table.tsv) > /tmp/phased_count.table
+      join  -j 1 -t $'\t' <(sort $TMPDIR/genotype_table.tsv) <(sort $TMPDIR/variantid_count_table.tsv) > $TMPDIR/phased_count.table
 
       # reheader the merged table
-      (echo -e "variant_id\tGT\t$(head -n1 $count_table)"; cat /tmp/phased_count.table) > $outputdir/$library_id.${interval}counts.$celltype.phased.table
+      (echo -e "variant_id\tGT\t$(head -n1 $count_table)"; cat $TMPDIR/phased_count.table) > $outputdir/$library_id.${interval}counts.$celltype.phased.table
     fi
 
     # TODO: annotate count table with gnomad AF and gene names etc from FUNCOTATION
@@ -329,17 +337,17 @@ if [ $sc_counts = "true" ]; then
   rm -rf $scbamdir; mkdir -p $scbamdir/{counts,bam}
 
   # # convert vcf to bed
-  bcftools query -f '%CHROM\t%POS\t%POS\n' /tmp/filter.$(basename $inputvcf) > /tmp/$(basename $inputvcf .vcf.gz).bed
+  bcftools query -f '%CHROM\t%POS\t%POS\n' $TMPDIR/filter.$(basename $inputvcf) > $TMPDIR/$(basename $inputvcf .vcf.gz).bed
 
   # # filter by region
   echo "Filtering wasp bam by vcf sites"
-  samtools view -bS -L /tmp/$(basename $inputvcf .vcf.gz).bed $waspbam | pv > $scbamdir/$library_id.${interval}sites.bam
+  samtools view -bS -L $TMPDIR/$(basename $inputvcf .vcf.gz).bed $waspbam | pv > $scbamdir/$library_id.${interval}sites.bam
   bamsites=$scbamdir/$library_id.${interval}sites.bam
   samtools index -@ $threads $bamsites
 
   # make list of all unique barcodes in wasp bam
   echo "Retrieving unique barcodes from $(echo $(basename $bamsites))"
-  barcodes=($(samtools view $bamsites | pv | cut -f 12- | tr "\t" "\n"  | grep  "^CB:Z:"  | cut -d ':' -f3 | sort | uniq )) 
+  barcodes=($(samtools view $bamsites | pv | cut -f 12- | tr "\t" "\n"  | grep  "^CB:Z:"  | cut -d ':' -f3 | sort | uniq ))
   num_barcodes=${#barcodes[@]}
 
   # split wasp bam file into cell-specific bams in parallel loop using subset-bam
@@ -347,13 +355,13 @@ if [ $sc_counts = "true" ]; then
   export TMPDIR=$workdir/TMPDIR
   rm -rf $TMPDIR; mkdir -p $TMPDIR 2> /dev/null
   for barcode in ${barcodes[*]}; do \
-    echo $barcode > /tmp/barcode.txt
+    echo $barcode > $TMPDIR/barcode.txt
     subset-bam \
       --bam $bamsites \
-      --cell-barcodes /tmp/barcode.txt \
+      --cell-barcodes $TMPDIR/barcode.txt \
       --out-bam $scbamdir/bam/$barcode.bam \
       --cores $threads
-    echo $barcode 
+    echo $barcode
   done | pv -l -s $num_barcodes > /dev/null
 
   # allele specific counts of celltype sam files with gatk in parallel loop
@@ -365,7 +373,7 @@ if [ $sc_counts = "true" ]; then
     gatk ASEReadCounter \
       -R $reference/fasta/genome.fa \
       -I $scbamdir/bam/$bamfile \
-      -V /tmp/filter.$(basename $inputvcf) \
+      -V $TMPDIR/filter.$(basename $inputvcf) \
       --verbosity ERROR \
       -O $scbamdir/counts/$table > /dev/null 2>&1  &
     while (( $(jobs |wc -l) >= (( ${threads} + 1 )) )); do
@@ -376,31 +384,31 @@ if [ $sc_counts = "true" ]; then
 
   # add a barcode column to each count table
   tables=($(ls $scbamdir/counts))
-  rm -rf /tmp/gather_tables; mkdir /tmp/gather_tables > /dev/null
+  rm -rf $TMPDIR/gather_tables; mkdir $TMPDIR/gather_tables > /dev/null
   for table in ${tables[@]}; do
     barcode=$(basename $table .counts)
-    awk -v d="$barcode" 'BEGIN{FS=OFS="\t"} {print $0, (NR>1?d:"barcode")}' $scbamdir/counts/$table > /tmp/gather_tables/$table &
-  done 
+    awk -v d="$barcode" 'BEGIN{FS=OFS="\t"} {print $0, (NR>1?d:"barcode")}' $scbamdir/counts/$table > $TMPDIR/gather_tables/$table &
+  done
 
   # concatenate all the barcode counts into a single table
-  (head -n1 /tmp/gather_tables/$tables; tail -q -n+2 /tmp/gather_tables/*) > $outputdir/$library_id.${interval}counts.single_cell.table
+  (head -n1 $TMPDIR/gather_tables/$tables; tail -q -n+2 $TMPDIR/gather_tables/*) > $outputdir/$library_id.${interval}counts.single_cell.table
 
   # add phased genotypes to counts table if input vcf is phased
   if [ $isphased = "true" ]; then
     # create a genotype table with unique variant ids and their corresponding genotypes using the filtered input vcf
-    bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' /tmp/filter.$(basename $inputvcf) |\
-    awk 'BEGIN{FS=OFS="\t"} {print $1"_"$2"_"$3"_"$4, $5}' > /tmp/genotype_table.tsv
+    bcftools query -f'%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' $TMPDIR/filter.$(basename $inputvcf) |\
+    awk 'BEGIN{FS=OFS="\t"} {print $1"_"$2"_"$3"_"$4, $5}' > $TMPDIR/genotype_table.tsv
 
     # create a unique identifier for each variant in the count table and put it in the first column
     count_table=$outputdir/$library_id.${interval}counts.single_cell.table
-    awk 'BEGIN{FS=OFS="\t"} {print (NR>1?$1"_"$2"_"$4"_"$5:"variant_id"), $0}' $count_table > /tmp/variantid_count_table.tsv
+    awk 'BEGIN{FS=OFS="\t"} {print (NR>1?$1"_"$2"_"$4"_"$5:"variant_id"), $0}' $count_table > $TMPDIR/variantid_count_table.tsv
 
     # join the count table and genotype table by unique variant_id in the first column
-    join  -j 1 -t $'\t' <(sort /tmp/genotype_table.tsv) <(sort /tmp/variantid_count_table.tsv) > /tmp/phased_count.table
+    join  -j 1 -t $'\t' <(sort $TMPDIR/genotype_table.tsv) <(sort $TMPDIR/variantid_count_table.tsv) > $TMPDIR/phased_count.table
 
     # reheader the merged table
-    (echo -e "variant_id\tGT\t$(head -n1 $count_table)"; cat /tmp/phased_count.table) > $outputdir/$library_id.${interval}counts.single_cell.phased.table
-  fi 
+    (echo -e "variant_id\tGT\t$(head -n1 $count_table)"; cat $TMPDIR/phased_count.table) > $outputdir/$library_id.${interval}counts.single_cell.phased.table
+  fi
 
   # TODO: annotate count table with gnomad AF and gene names etc from FUNCOTATION
 

@@ -17,14 +17,14 @@ function usage {
 cat << "EOF"
 
 
-        /|      (                (      (              
-     .-((--.     )\ )     (       )\ )   )\ )     (    
-    ( '`^'; )   (()/(     )\     (()/(  (()/(     )\   
-    `;#    |     /(_)) ((((_)(    /(_))  /(_)) ((((_)( 
-     \#    |    (_))    )\ _ )\  (_))   (_))    )\ _ )\ 
-      \#   \    / __|   (_)_\(_) | |    / __|   (_)_\(_) 
-       '-.  )   \__ \    / _ \   | |__  \__ \    / _ \   
-          \(    |___/   /_/ \_\  |____| |___/   /_/ \_\ 
+        /|      (                (      (
+     .-((--.     )\ )     (       )\ )   )\ )     (
+    ( '`^'; )   (()/(     )\     (()/(  (()/(     )\
+    `;#    |     /(_)) ((((_)(    /(_))  /(_)) ((((_)(
+     \#    |    (_))    )\ _ )\  (_))   (_))    )\ _ )\
+      \#   \    / __|   (_)_\(_) | |    / __|   (_)_\(_)
+       '-.  )   \__ \    / _ \   | |__  \__ \    / _ \
+          \(    |___/   /_/ \_\  |____| |___/   /_/ \_\
            `
 
 Single Cell Allele Specific Analysis
@@ -105,10 +105,18 @@ if [ ! -f $inputvcf ]; then { echo "Input vcf file not found"; exit 1; }; fi
 # ensure gatk and miniconda are in path when working in LSF environment
 export PATH=/gatk:/opt/miniconda/envs/gatk/bin:/opt/miniconda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
-contigdir=/tmp/vcf/$library_id
+if [ -z "${TMPDIR}" ]
+then
+  export TMPDIR="/tmp"
+  echo "TMPDIR was undefined, set to $TMPDIR"
+else
+  echo "TMPDIR is already set to $TMPDIR"
+fi
+
+contigdir=$TMPDIR/vcf/$library_id
 wasp=/opt/WASP
 workdir=$SCRATCH1/wasp_${modality}/${genotype}_genotype/find_intersecting_snps_${library_id}
-mkdir -p $workdir 
+mkdir -p $workdir
 mkdir -p $outputdir 2> /dev/null
 mkdir -p $contigdir
 
@@ -156,29 +164,29 @@ if [ $isphased = "true" ]; then
   echo "Input vcf is phased"
   # chrominfo from http://hgdownload.cse.ucsc.edu/goldenPath/hg38/database/chromInfo.txt.gz
   # first separate input vcf into contigs as required by snp2h5 utility
-  rm /tmp/haplotypes.h5 /tmp/snp_index.h5 /tmp/snp_tab.h5 /tmp/haplotype.chr*.vcf.gz 2> /dev/null
+  rm $TMPDIR/haplotypes.h5 $TMPDIR/snp_index.h5 $TMPDIR/snp_tab.h5 $TMPDIR/haplotype.chr*.vcf.gz 2> /dev/null
   for contig in ${contigs[@]}; do
     echo "Subsetting vcf for $contig"
-    bcftools view -Oz $inputvcf $contig -o /tmp/haplotype.$contig.vcf.gz
+    bcftools view -Oz $inputvcf $contig -o $TMPDIR/haplotype.$contig.vcf.gz
   done
   # create snp hdf5 file
   echo "Generating snp hdf5"
   $wasp/snp2h5/snp2h5 \
     --chrom reference/hg38_chromInfo.txt.gz \
     --format vcf \
-    --haplotype /tmp/haplotypes.h5 \
-    --snp_index /tmp/snp_index.h5 \
-    --snp_tab   /tmp/snp_tab.h5 \
-    /tmp/haplotype.chr*.vcf.gz
+    --haplotype $TMPDIR/haplotypes.h5 \
+    --snp_index $TMPDIR/snp_index.h5 \
+    --snp_tab   $TMPDIR/snp_tab.h5 \
+    $TMPDIR/haplotype.chr*.vcf.gz
   # the is_paired_end variable expands to --is_paired_end for paired-end reads
   echo "Running WASP and writing to $workdir"
   python $wasp/mapping/find_intersecting_snps.py \
     ${is_paired_end} \
     --is_sorted \
     --output_dir $workdir \
-    --snp_index /tmp/snp_index.h5 \
-    --snp_tab /tmp/snp_tab.h5 \
-    --haplotype /tmp/haplotypes.h5 \
+    --snp_index $TMPDIR/snp_index.h5 \
+    --snp_tab $TMPDIR/snp_tab.h5 \
+    --haplotype $TMPDIR/haplotypes.h5 \
     $inputbam
 fi
 
@@ -187,7 +195,7 @@ fi
 if [ $isphased = "false" ]; then
   # set output file name to indicate that it was not phased
   # split the vcf into separate files by contig and print ref and alt for each variant
-  contigdir=/tmp/vcf 
+  contigdir=$TMPDIR/vcf
   mkdir $contigdir 2> /dev/null
   for contig in $contigs; do
     echo "Generating snv contig file for $contig"
@@ -218,7 +226,7 @@ if [ $modality = "rna" ]; then
       --genomeFastaFiles rna_ref/fasta/genome.fa \
       --sjdbGTFfile rna_ref/genes/genes.gtf
   fi
-  ### use STAR to remap single end reads 
+  ### use STAR to remap single end reads
   if [ $r2only = "true" ]; then
     echo "Running STAR with single end reads"
     STAR \
@@ -231,7 +239,7 @@ if [ $modality = "rna" ]; then
     samtools index -@ $threads $workdir/$bn.sorted.realigned.bam
   elif [ $r2only = "false" ]; then
     echo "Running STAR with paired end reads"
-    ### use STAR to remap paired end reads 
+    ### use STAR to remap paired end reads
     STAR \
       --genomeDir $stargdir \
       --runThreadN $threads \
@@ -249,10 +257,10 @@ if [ $modality = "atac" ]; then
   # check for bwa mem index
   if [ ! -f $atacref/fasta/genome.dict ]; then
     echo "Generating BWA index and putting in atac_ref directory"
-    bwa index $atacref/fasta/genome.fa 
-  fi  
+    bwa index $atacref/fasta/genome.fa
+  fi
   # use bwa to remap reads
-  echo "Realigning reads with BWA" 
+  echo "Realigning reads with BWA"
   bwa mem -t $threads $atacref/fasta/genome.fa $workdir/$bn.remap.fq1.gz $workdir/$bn.remap.fq2.gz > $workdir/$bn.realigned.sam
   # sort the realigned bam file
   samtools view -bS $workdir/$bn.realigned.sam > $workdir/$bn.realigned.bam
@@ -274,12 +282,12 @@ echo "Merging realigned bam file"
 samtools merge -f --threads $threads $workdir/$bn.keep.merge.bam \
   $workdir/$bn.keep.bam \
   $workdir/keep.bam
-echo "Sorting output: $outputbam"  
+echo "Sorting output: $outputbam"
 samtools sort -@ $threads -T $workdir -o $outputdir/$outputbam \
   $workdir/$bn.keep.merge.bam
 echo "Indexing output: $outputbam"
 samtools index $outputdir/$outputbam
-echo "Writing to directory: $outputdir"          
+echo "Writing to directory: $outputdir"
 
 # NOTE: the WASP tool does not account for UMI / barcodes when it removes duplicates
 # SOLUTION: retain cellranger duplicate markings and ASEReadCounter will automatically filter them OR
