@@ -353,8 +353,6 @@ if [ $sc_counts = "true" ]; then
 
   # split wasp bam file into cell-specific bams in parallel loop using subset-bam
   echo "Splitting $(echo $(basename $bamsites)) into single cell bam files"
-  export TMPDIR=$workdir/TMPDIR
-  rm -rf $TMPDIR; mkdir -p $TMPDIR 2> /dev/null
   # https://github.com/aertslab/single_cell_toolkit/blob/master/subset_bam_per_cb.sh
   subset_bam_per_cb.sh $bamsites $scbamdir/barcodes.txt $scbamdir/bam/ 1000
 
