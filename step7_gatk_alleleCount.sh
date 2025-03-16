@@ -354,14 +354,14 @@ if [ $sc_counts = "true" ]; then
   # split wasp bam file into cell-specific bams in parallel loop using subset-bam
   echo "Splitting $(echo $(basename $bamsites)) into single cell bam files"
   # https://github.com/aertslab/single_cell_toolkit/blob/master/subset_bam_per_cb.sh
-  subset_bam_per_cb.sh $bamsites $scbamdir/barcodes.txt $scbamdir/bam/ 1000
+  subset_bam_per_cb.sh $bamsites $scbamdir/barcodes.txt $scbamdir/bam/CB 1000
 
   # allele specific counts of celltype sam files with gatk in parallel loop
   # output as [barcode].counts in counts dir
   echo "Counting single cell bam files"
   bamfiles=($(ls $scbamdir/bam))
   for bamfile in ${bamfiles[*]}; do
-    table=$(basename $bamfile .bam).counts
+    table=$(basename $bamfile .bam | sed -e 's/^CB.//').counts
     gatk ASEReadCounter \
       -R $reference/fasta/genome.fa \
       -I $scbamdir/bam/$bamfile \
